@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iPad 訂購分流系統 ver 1.3</title>
+    <title>iPad 訂購分流系統 ver 1.5</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <style>
@@ -19,7 +19,7 @@
     <!-- 登入與選擇面板 -->
     <div id="login-view" class="flex flex-col items-center justify-center h-full">
         <div class="bg-white p-8 rounded-xl shadow-lg text-center w-96">
-            <h1 class="text-2xl font-bold mb-6 text-blue-800">iPad 訂購分流系統 <span class="text-sm text-gray-500">ver 1.3</span></h1>
+            <h1 class="text-2xl font-bold mb-6 text-blue-800">iPad 訂購分流系統 <span class="text-sm text-gray-500">ver 1.5</span></h1>
             
             <label class="block text-left font-bold mb-2">1. 請選擇日期：</label>
             <select id="date-select" class="w-full p-3 border rounded mb-6 text-lg">
@@ -70,7 +70,7 @@
         </div>
     </div>
 
-    <!-- 📝 簽到處版面 (維持不變) -->
+    <!-- 📝 簽到處版面 -->
     <div id="reception-view" class="hidden p-6 relative">
         <button onclick="location.reload()" class="absolute top-4 right-4 bg-gray-300 px-4 py-2 rounded">返回</button>
         <h2 class="text-3xl font-bold mb-4">📝 接待處簽到 (<span class="sys-date-label"></span>)</h2>
@@ -127,13 +127,30 @@
     </div>
 
     <!-- 櫃檯版面 -->
-    <div id="counter-view" class="hidden flex col items-center justify-center h-full relative">
-        <button onclick="location.reload()" class="absolute top-4 left-4 bg-gray-300 px-4 py-2 rounded">返回</button>
-        <div class="text-center">
-            <h2 class="text-6xl font-bold mb-4">你是：櫃檯 <span id="counter-id-label" class="text-purple-600">X</span></h2>
-            <p class="text-2xl mb-8">目前服務：<span id="counter-current-ticket" class="font-bold text-blue-600 text-5xl">無</span></p>
-            <button id="btn-call-next" class="bg-purple-600 text-white font-bold text-5xl py-12 px-24 rounded-2xl shadow-xl hover:bg-purple-700 active:scale-95 transition">
-                呼叫下一位<br><span class="text-xl font-normal">(優先本區，無人則跨區)</span>
+    <div id="counter-view" class="hidden flex col items-center justify-center h-full relative p-6">
+        <button onclick="location.reload()" class="absolute top-4 left-4 bg-gray-300 px-4 py-2 rounded">返回首頁</button>
+        <div class="w-full max-w-xl mx-auto text-center mt-20">
+            <h2 class="text-5xl font-bold mb-2">櫃檯 <span id="counter-id-label" class="text-purple-600">X</span></h2>
+            
+            <!-- 目前呼叫中的大卡片 -->
+            <div class="bg-white p-8 rounded-2xl shadow-lg border-2 border-purple-300 my-8">
+                <p class="text-xl text-gray-500 mb-2">正在呼叫及處理的籌號</p>
+                <div id="counter-current-ticket" class="text-7xl font-black text-blue-600">無</div>
+                
+                <!-- 輔助操作按鈕：只有在有叫號時才顯示 -->
+                <div id="counter-action-block" class="hidden grid grid-cols-2 gap-4 mt-6">
+                    <button onclick="markCurrentCompleted()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl text-xl shadow active:scale-95 transition">
+                        ✅ 完成訂購
+                    </button>
+                    <button onclick="markCurrentNoShow()" class="bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl text-xl shadow active:scale-95 transition">
+                        ❌ 無人回應 (過號)
+                    </button>
+                </div>
+            </div>
+
+            <!-- 主叫號按鈕 -->
+            <button id="btn-call-next" class="w-full bg-purple-600 text-white font-bold text-4xl py-8 px-8 rounded-2xl shadow-xl hover:bg-purple-700 active:scale-95 transition">
+                呼叫下一位
             </button>
         </div>
     </div>
@@ -192,6 +209,7 @@
         let sessionDate = "";
         let sessionCounter = "";
         let localTickets = {};
+        let currentActiveCalledTicket = ""; // 櫃檯當前持有的籌號
 
         window.enterSystem = function(role, counterId = '') {
             sessionDate = document.getElementById('date-select').value;
@@ -208,10 +226,9 @@
         }
 
         // ==============================
-        // ⚙️ 後台管理邏輯 (Admin) - 含匯出功能
+        // ⚙️ 後台管理邏輯 (Admin)
         // ==============================
         function initAdmin() {
-            // 匯入 CSV
             document.getElementById('btn-import-csv').addEventListener('click', () => {
                 const file = document.getElementById('csv-upload').files[0];
                 if (!file) return alert('請先選擇檔案');
@@ -242,16 +259,15 @@
                 });
             });
 
-            // 📥 匯出當日報表 (CSV)
             document.getElementById('btn-export-csv').addEventListener('click', async () => {
                 const snapshot = await get(ref(db, `${sessionDate}/tickets`));
                 const data = snapshot.val() || {};
-                
-                // 整理資料陣列
                 const records = Object.values(data).map(t => {
                     let statusZh = '未到達';
                     if(t.status === 'signed_in') statusZh = '已簽到等待中';
-                    if(t.status === 'called') statusZh = '已叫號(處理完畢)';
+                    if(t.status === 'called') statusZh = '已叫號中';
+                    if(t.status === 'completed') statusZh = '已完成訂購';
+                    if(t.status === 'no_show') statusZh = '無人回應(過號)';
                     
                     let signTime = '';
                     if(t.signInTime > 0) {
@@ -260,36 +276,20 @@
                     }
 
                     return {
-                        "籌號": t.displayTicket,
-                        "班別": t.studentClass,
-                        "學號": t.studentId || '',
-                        "學生姓名": t.name,
-                        "電話號碼": t.phone || '',
-                        "原定櫃檯": t.originalCounter,
-                        "預計時段": t.timeSlot,
-                        "狀態": statusZh,
-                        "簽到時間": signTime
+                        "籌號": t.displayTicket, "班別": t.studentClass, "學號": t.studentId || '', "學生姓名": t.name,
+                        "電話號碼": t.phone || '', "原定櫃檯": t.originalCounter, "預計時段": t.timeSlot,
+                        "狀態": statusZh, "簽到時間": signTime
                     };
                 });
-
                 if (records.length === 0) return alert('目前沒有資料可匯出');
-
-                // 加入 BOM，確保 Excel 打開中文不會亂碼
                 let csvContent = "\uFEFF" + Papa.unparse(records);
                 let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                
-                // 觸發下載
                 let link = document.createElement("a");
-                let url = URL.createObjectURL(blob);
-                link.setAttribute("href", url);
+                link.setAttribute("href", URL.createObjectURL(blob));
                 link.setAttribute("download", `iPad訂購名單_${sessionDate === 'day1' ? '17Sep' : '18Sep'}.csv`);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
             });
 
-            // 清空資料
             document.getElementById('btn-clear-db').addEventListener('click', () => {
                 let dateName = sessionDate === 'day1' ? '9月17日' : '9月18日';
                 if (confirm(`⚠️ 警告：確定要【清空】 ${dateName} 的所有雲端資料與叫號紀錄嗎？`)) {
@@ -297,7 +297,6 @@
                 }
             });
 
-            // 監聽未到達名單
             onValue(ref(db, `${sessionDate}/tickets`), (snapshot) => {
                 let missingHTML = ''; let count = 0;
                 snapshot.forEach(child => {
@@ -338,14 +337,22 @@
 
             arr.forEach(t => {
                 let statusText = ''; let actionButtons = '';
+                
+                // 狀態顯示與判斷
                 if (t.status === 'pending') {
                     statusText = '<span class="text-red-500 font-bold">🔴 未到達</span>';
                     actionButtons = `<button onclick="signIn('${t.displayTicket}')" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded mr-2">簽到</button>`;
                 } else if (t.status === 'signed_in') {
                     statusText = '<span class="text-green-600 font-bold">🟢 已簽到等待</span>';
                     actionButtons = `<button onclick="unSignIn('${t.displayTicket}')" class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded mr-2 text-xs">取消簽到</button>`;
+                } else if (t.status === 'no_show') {
+                    // 如果是過號狀態，顯示橘色，並提供「重新排隊」按鈕解除冷卻
+                    statusText = '<span class="text-orange-500 font-bold">⚠️ 過號未到(冷凍中)</span>';
+                    actionButtons = `<button onclick="resetNoShow('${t.displayTicket}')" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded mr-2 text-xs font-bold">🔄 重新叫號</button>`;
+                } else if (t.status === 'called') {
+                    statusText = '<span class="text-blue-500 font-bold">🔊 叫號中...</span>';
                 } else {
-                    statusText = '<span class="text-gray-400">⚪ 已叫號完成</span>';
+                    statusText = '<span class="text-gray-400">⚪ 已完成訂購</span>';
                 }
 
                 actionButtons += `
@@ -367,6 +374,14 @@
 
         window.signIn = function(ticketId) { update(ref(db, `${sessionDate}/tickets/${ticketId}`), { status: 'signed_in', signInTime: Date.now() }); }
         window.unSignIn = function(ticketId) { update(ref(db, `${sessionDate}/tickets/${ticketId}`), { status: 'pending', signInTime: 0 }); }
+        
+        // 手動解除過號冷凍
+        window.resetNoShow = function(ticketId) {
+            update(ref(db, `${sessionDate}/tickets/${ticketId}`), {
+                status: 'signed_in',
+                signInTime: Date.now() // 給他一個最新的簽到時間，排入下一輪
+            }).then(() => alert(`籌號 ${ticketId} 已重設為等待中，櫃檯可重新叫號。`));
+        }
 
         window.openWalkInModal = function() {
             document.getElementById('modal-title').innerText = "➕ 新增 Walk-in 籌號";
@@ -416,63 +431,75 @@
         }
 
         // ==============================
-        // 櫃檯與大螢幕邏輯 (含語音 TTS)
-        // ==============================
-                // ==============================
-        // 櫃檯邏輯 (Counter - 三級排序 ver 1.4)
+        // 櫃檯邏輯 (Counter - ver 1.5 狀態按鈕優化)
         // ==============================
         function initCounter() {
+            // 監聽此櫃檯目前負責的籌號
             onValue(ref(db, `${sessionDate}/currentCalls/${sessionCounter}`), (snapshot) => {
-                document.getElementById('counter-current-ticket').innerText = snapshot.val() || '無';
+                let currentTicket = snapshot.val() || '無';
+                currentActiveCalledTicket = currentTicket;
+                document.getElementById('counter-current-ticket').innerText = currentTicket;
+                
+                let actionBlock = document.getElementById('counter-action-block');
+                let callBtn = document.getElementById('btn-call-next');
+                
+                if (currentTicket !== '無' && currentTicket !== '--') {
+                    actionBlock.classList.remove('hidden'); // 顯示完成與過號按鈕
+                    callBtn.classList.add('hidden');       // 隱藏主叫號按鈕，必須先處理當前家長
+                } else {
+                    actionBlock.classList.add('hidden');
+                    callBtn.classList.remove('hidden');
+                }
             });
 
+            // 呼叫下一位 (含三級排序、冷卻重設)
             document.getElementById('btn-call-next').addEventListener('click', async () => {
                 const snapshot = await get(ref(db, `${sessionDate}/tickets`));
                 let tickets = snapshot.val() || {};
+                let now = Date.now();
+
+                // 檢查是否有「過號 (no_show) 且冷凍超過 10 分鐘」的家長，自動將其解凍為「已簽到」
+                let updatesTemp = {};
+                let needUpdate = false;
+                Object.values(tickets).forEach(t => {
+                    if (t.status === 'no_show' && t.noShowTime && (now - t.noShowTime > 10 * 60 * 1000)) {
+                        updatesTemp[`${sessionDate}/tickets/${t.displayTicket}/status`] = 'signed_in';
+                        updatesTemp[`${sessionDate}/tickets/${t.displayTicket}/signInTime`] = now; // 更新時間，讓其重新排序
+                        t.status = 'signed_in'; // 暫時修改本地對象以供排序
+                        t.signInTime = now;
+                        needUpdate = true;
+                    }
+                });
+                if (needUpdate) {
+                    await update(ref(db), updatesTemp);
+                }
+
+                // 尋找「已簽到」的等待隊列
                 let waiting = Object.values(tickets).filter(t => t.status === 'signed_in');
-                
                 if (waiting.length === 0) return alert('目前沒有已簽到的家長！');
 
-                // 輔助函數：將預計時段文字轉換為排序分數
-                // 例如 "15:25-15:45" -> 1525, "16:30-17:00" -> 1630, "現場" -> 9999 (排到最後)
+                // 三級時段權重算法
                 const getTimeScore = (timeStr) => {
                     if (!timeStr || timeStr === '現場' || timeStr === '未設定') return 9999;
                     let match = timeStr.match(/^(\d{2}):(\d{2})/);
-                    if (match) {
-                        return parseInt(match[1]) * 100 + parseInt(match[2]);
-                    }
-                    return 9999;
+                    return match ? parseInt(match[1]) * 100 + parseInt(match[2]) : 9999;
                 };
 
-                // 三級排序演算法
-                const sortQueue = (list, targetCounter) => {
-                    return list.sort((a, b) => {
-                        // 【第一級排序】：本櫃檯優先級
-                        // 1 代表是本區/Walk-in，2 代表是跨區支援
-                        let aCounterMatch = (a.originalCounter === targetCounter || a.originalCounter === 'Walk-in') ? 1 : 2;
-                        let bCounterMatch = (b.originalCounter === targetCounter || b.originalCounter === 'Walk-in') ? 1 : 2;
-                        
-                        if (aCounterMatch !== bCounterMatch) {
-                            return aCounterMatch - bCounterMatch;
-                        }
+                // 排序
+                waiting.sort((a, b) => {
+                    let aMatch = (a.originalCounter === sessionCounter || a.originalCounter === 'Walk-in') ? 1 : 2;
+                    let bMatch = (b.originalCounter === sessionCounter || b.originalCounter === 'Walk-in') ? 1 : 2;
+                    if (aMatch !== bMatch) return aMatch - bMatch;
 
-                        // 【第二級排序】：預計時段優先
-                        let aTimeScore = getTimeScore(a.timeSlot);
-                        let bTimeScore = getTimeScore(b.timeSlot);
-                        if (aTimeScore !== bTimeScore) {
-                            return aTimeScore - bTimeScore;
-                        }
+                    let aScore = getTimeScore(a.timeSlot);
+                    let bScore = getTimeScore(b.timeSlot);
+                    if (aScore !== bScore) return aScore - bScore;
 
-                        // 【第三級排序】：簽到先後順序
-                        return (a.signInTime || 0) - (b.signInTime || 0);
-                    });
-                };
+                    return (a.signInTime || 0) - (b.signInTime || 0);
+                });
 
-                // 進行三級排序
-                let sortedWaiting = sortQueue(waiting, sessionCounter);
-                let nextTicket = sortedWaiting[0];
+                let nextTicket = waiting[0];
 
-                // 更新至 Firebase
                 let updates = {};
                 updates[`${sessionDate}/tickets/${nextTicket.displayTicket}/status`] = 'called';
                 updates[`${sessionDate}/currentCalls/${sessionCounter}`] = nextTicket.displayTicket;
@@ -480,23 +507,46 @@
             });
         }
 
+        // 櫃檯點擊：✅ 完成辦理
+        window.markCurrentCompleted = function() {
+            if (currentActiveCalledTicket === '無' || currentActiveCalledTicket === '') return;
+            
+            let updates = {};
+            updates[`${sessionDate}/tickets/${currentActiveCalledTicket}/status`] = 'completed';
+            updates[`${sessionDate}/currentCalls/${sessionCounter}`] = '無'; // 釋放櫃檯
+            update(ref(db), updates).then(() => {
+                alert(`已完成籌號 ${currentActiveCalledTicket} 的辦理！`);
+            });
+        }
 
-        // 語音播放函數
-        window.testAudio = function() {
-            playVoice("這是一個語音測試，準備開始叫號");
-        };
+        // 櫃檯點擊：❌ 無人回應 (過號)
+        window.markCurrentNoShow = function() {
+            if (currentActiveCalledTicket === '無' || currentActiveCalledTicket === '') return;
+            
+            if (confirm(`確定將籌號 ${currentActiveCalledTicket} 設為過號未到？\n該籌號將被踢出大螢幕，並進入10分鐘再叫號冷卻期。`)) {
+                let updates = {};
+                updates[`${sessionDate}/tickets/${currentActiveCalledTicket}/status`] = 'no_show';
+                updates[`${sessionDate}/tickets/${currentActiveCalledTicket}/noShowTime`] = Date.now(); // 記錄冷凍開始時間
+                updates[`${sessionDate}/currentCalls/${sessionCounter}`] = '無'; // 釋放櫃檯大螢幕
+                update(ref(db), updates).then(() => {
+                    alert(`籌號 ${currentActiveCalledTicket} 已設為過號。櫃檯已釋放。`);
+                });
+            }
+        }
 
+        // ==============================
+        // 📺 大螢幕邏輯 (Display - TTS)
+        // ==============================
         function playVoice(text) {
             if ('speechSynthesis' in window) {
-                // 先停止可能還在播放的聲音
                 window.speechSynthesis.cancel();
                 let msg = new SpeechSynthesisUtterance(text);
-                msg.lang = 'zh-HK'; // 設定為香港廣東話
-                msg.rate = 0.9;     // 稍微放慢速度，讓家長聽得清楚
-                msg.pitch = 1;
+                msg.lang = 'zh-HK'; msg.rate = 0.9; msg.pitch = 1;
                 window.speechSynthesis.speak(msg);
             }
         }
+
+        window.testAudio = function() { playVoice("廣播測試，請家長前往櫃檯"); };
 
         function initDisplay() {
             let previousCalls = { A: '', B: '', C: '' };
@@ -505,14 +555,12 @@
             onValue(ref(db, `${sessionDate}/currentCalls`), (snapshot) => {
                 let calls = snapshot.val() || {};
                 
-                // 檢查是否有新的叫號，並觸發語音 (排除第一次載入時)
                 if (!isFirstLoad) {
                     ['A', 'B', 'C'].forEach(counter => {
                         let newTicket = calls[counter];
-                        if (newTicket && newTicket !== previousCalls[counter] && newTicket !== '--') {
-                            // 延遲一點播放，避免畫面還沒轉聲音先出
+                        // 只有在新叫號（非無、非--、非完成後變回的「無」）才播放聲音
+                        if (newTicket && newTicket !== previousCalls[counter] && newTicket !== '--' && newTicket !== '無') {
                             setTimeout(() => {
-                                // 將號碼拆開唸會比較清楚，例如 A 1 唸成 "A" "一"
                                 let speakText = newTicket.replace(/([a-zA-Z])(\d+)/, "$1 $2");
                                 playVoice(`請 ${speakText} 號家長，前往櫃檯 ${counter}`);
                             }, 500);
@@ -520,19 +568,22 @@
                     });
                 }
 
-                // 更新畫面
-                document.getElementById('display-counter-A').innerText = calls.A || '--';
-                document.getElementById('display-counter-B').innerText = calls.B || '--';
-                document.getElementById('display-counter-C').innerText = calls.C || '--';
+                document.getElementById('display-counter-A').innerText = (calls.A === '無' ? '--' : (calls.A || '--'));
+                document.getElementById('display-counter-B').innerText = (calls.B === '無' ? '--' : (calls.B || '--'));
+                document.getElementById('display-counter-C').innerText = (calls.C === '無' ? '--' : (calls.C || '--'));
 
-                // 記錄這次的狀態，留給下次比對
                 previousCalls = { A: calls.A || '--', B: calls.B || '--', C: calls.C || '--' };
                 isFirstLoad = false;
             });
 
             onValue(ref(db, `${sessionDate}/tickets`), (snapshot) => {
                 let tickets = snapshot.val() || {};
-                let waiting = Object.values(tickets).filter(t => t.status === 'signed_in').sort((a, b) => a.signInTime - b.signInTime);
+                let waiting = Object.values(tickets).filter(t => t.status === 'signed_in').sort((a, b) => {
+                    const scoreA = (a.timeSlot === '現場' || !a.timeSlot) ? 9999 : parseInt(a.timeSlot.replace(':', ''));
+                    const scoreB = (b.timeSlot === '現場' || !b.timeSlot) ? 9999 : parseInt(b.timeSlot.replace(':', ''));
+                    if (scoreA !== scoreB) return scoreA - scoreB;
+                    return (a.signInTime || 0) - (b.signInTime || 0);
+                });
                 document.getElementById('display-next-inline').innerText = waiting.length > 0 ? waiting[0].displayTicket : '--';
             });
         }
