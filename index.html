@@ -418,6 +418,9 @@
         // ==============================
         // 櫃檯與大螢幕邏輯 (含語音 TTS)
         // ==============================
+                // ==============================
+        // 櫃檯邏輯 (Counter - 三級排序 ver 1.4)
+        // ==============================
         function initCounter() {
             onValue(ref(db, `${sessionDate}/currentCalls/${sessionCounter}`), (snapshot) => {
                 document.getElementById('counter-current-ticket').innerText = snapshot.val() || '無';
@@ -427,25 +430,56 @@
                 const snapshot = await get(ref(db, `${sessionDate}/tickets`));
                 let tickets = snapshot.val() || {};
                 let waiting = Object.values(tickets).filter(t => t.status === 'signed_in');
+                
                 if (waiting.length === 0) return alert('目前沒有已簽到的家長！');
 
-                let myQueue = waiting.filter(t => t.originalCounter === sessionCounter);
-                let nextTicket = null;
+                // 輔助函數：將預計時段文字轉換為排序分數
+                // 例如 "15:25-15:45" -> 1525, "16:30-17:00" -> 1630, "現場" -> 9999 (排到最後)
+                const getTimeScore = (timeStr) => {
+                    if (!timeStr || timeStr === '現場' || timeStr === '未設定') return 9999;
+                    let match = timeStr.match(/^(\d{2}):(\d{2})/);
+                    if (match) {
+                        return parseInt(match[1]) * 100 + parseInt(match[2]);
+                    }
+                    return 9999;
+                };
 
-                if (myQueue.length > 0) {
-                    myQueue.sort((a, b) => a.signInTime - b.signInTime);
-                    nextTicket = myQueue[0];
-                } else {
-                    waiting.sort((a, b) => a.signInTime - b.signInTime);
-                    nextTicket = waiting[0];
-                }
+                // 三級排序演算法
+                const sortQueue = (list, targetCounter) => {
+                    return list.sort((a, b) => {
+                        // 【第一級排序】：本櫃檯優先級
+                        // 1 代表是本區/Walk-in，2 代表是跨區支援
+                        let aCounterMatch = (a.originalCounter === targetCounter || a.originalCounter === 'Walk-in') ? 1 : 2;
+                        let bCounterMatch = (b.originalCounter === targetCounter || b.originalCounter === 'Walk-in') ? 1 : 2;
+                        
+                        if (aCounterMatch !== bCounterMatch) {
+                            return aCounterMatch - bCounterMatch;
+                        }
 
+                        // 【第二級排序】：預計時段優先
+                        let aTimeScore = getTimeScore(a.timeSlot);
+                        let bTimeScore = getTimeScore(b.timeSlot);
+                        if (aTimeScore !== bTimeScore) {
+                            return aTimeScore - bTimeScore;
+                        }
+
+                        // 【第三級排序】：簽到先後順序
+                        return (a.signInTime || 0) - (b.signInTime || 0);
+                    });
+                };
+
+                // 進行三級排序
+                let sortedWaiting = sortQueue(waiting, sessionCounter);
+                let nextTicket = sortedWaiting[0];
+
+                // 更新至 Firebase
                 let updates = {};
                 updates[`${sessionDate}/tickets/${nextTicket.displayTicket}/status`] = 'called';
                 updates[`${sessionDate}/currentCalls/${sessionCounter}`] = nextTicket.displayTicket;
                 update(ref(db), updates);
             });
         }
+
 
         // 語音播放函數
         window.testAudio = function() {
